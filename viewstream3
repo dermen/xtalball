@@ -1,0 +1,335 @@
+#!/usr/bin/python
+try: 
+    import Tkinter as tk
+except ImportError:
+    import tkinter as tk
+import pandas
+import h5py
+import numpy as np
+import matplotlib as mpl
+mpl.use('TkAgg')
+
+
+from ImageViewer import ImageViewer
+
+
+btnstyle = {'font': 'Helvetica 10 bold', 
+            'activebackground': 'green', 'activeforeground': 'white',
+            'relief': tk.RAISED, 'highlightcolor':'red'}  # , 'bd':5}
+labstyle = {'font': 'Helvetica 14 bold', 'bg': 'snow', 'fg': 'black',
+            'activebackground': 'green', 'activeforeground': 'white'}
+
+fr = {'bg': None, }
+frpk = {'padx': 5, 'pady': 5}
+
+class ModelApp(tk.Frame):
+    def __init__(self, master, known_pkl, pred_pkl, cell_pkl, *args, **kwargs):
+        tk.Frame.__init__(self, *args, **kwargs)
+        self.master = master
+
+#       load the dataframes
+        self.known = pandas.read_pickle(known_pkl)
+        self.pred = pandas.read_pickle(pred_pkl)
+        self.cell = pandas.read_pickle(cell_pkl)
+
+#       load the files, put in a dict...
+        self.unique_fnames = self.cell.cxi_fname.unique()
+        print (self.unique_fnames)
+        self.hdf5_handles = {f: h5py.File(f, 'r') 
+            for f in self.unique_fnames}
+
+        self._setup_image_indexing()
+
+        self._set_idx_fname_path()
+        self._set_df()
+        self._set_image(first=True)
+        self._set_centers()
+
+        self.xl = (None, None)
+        self.yl = (None, None)
+
+        self._buttons()
+        self._set_unit_cell_info()
+        self._display()
+
+    def _set_image(self, first=False):
+        dset = self.hdf5_handles[self.fname][self.path]
+        self.img = dset[self.idx]  # - 1]
+        if first:
+            toplvl= tk.Toplevel(self.master)
+            self.IV = ImageViewer(toplvl, self.img) # passive=True)
+            self.IV.pack( fill=tk.BOTH, expand=1)
+            self.fig = self.IV.fig
+            self.ax = self.IV.ax
+
+    def _setup_image_indexing(self, queries=None):
+#       load the dataframe indices
+        df = self.cell
+        if queries is not None:
+            for q in queries:
+                df = df.query(q)
+        self.indices = df.dataset_index.values
+        self.cxi_fnames = df.cxi_fname.values
+        self.dset_paths = df.dataset_path.values
+        self.A = df.a.values
+        self.B = df.b.values
+        self.C = df.c.values
+        self.AL = df.alpha.values
+        self.BE = df.beta.values
+        self.GA = df.gamma.values
+#       choose an initial pattern
+        self.counter = 0
+
+    def _set_idx_fname_path(self):
+        self.idx = self.indices[self.counter]
+        self.fname = self.cxi_fnames[self.counter]
+        self.path = self.dset_paths[self.counter]
+
+    def _set_df(self):
+        self.df_k = self.known.loc[np.logical_and(
+            self.known.dataset_index == self.idx, self.known.cxi_fname == self.fname)]
+        self.df_p = self.pred.loc[np.logical_and(
+            self.pred.dataset_index == self.idx, self.pred.cxi_fname == self.fname)]
+
+    def _set_centers(self):
+        self.known_centers = zip(
+            self.df_k['ss/px'].values,
+            self.df_k['fs/px'].values)
+        self.pred_centers = zip(
+            self.df_p['ss/px'].values,
+            self.df_p['fs/px'].values)
+
+    def _display(self):
+        
+        if self.fix_zoom_variable.get() == 1:
+            self.xl = self.ax.get_xlim()
+            self.yl = self.ax.get_ylim()
+        else:
+            self.xl = (-0.5, self.img.shape[1] - 0.5)
+            self.yl = (self.img.shape[0] - 0.5, -0.5)
+
+        self.known_circs = []
+        for cent in self.known_centers:
+            circ = mpl.patches.Circle(
+                xy=(cent[1], cent[0]), radius=6, ec='Deeppink', fc='none', lw=1)
+            self.ax.add_patch(circ)
+            self.known_circs.append(circ)
+            if self.toggle_known_var.get():
+                circ.set_visible(True)
+            else:
+                circ.set_visible(False)
+
+        self.pred_circs = []
+        for cent in self.pred_centers:
+            circ = mpl.patches.Circle(
+                xy=(cent[1], cent[0]), radius=9, 
+                ec='b', fc='none', lw=1, ls='dashed')
+            self.ax.add_patch(circ)
+            self.pred_circs.append(circ)
+            if self.toggle_pred_var.get():
+                circ.set_visible(True)
+            else:
+                circ.set_visible(False)
+
+        self.pred_circ_visible = True
+        self.known_circ_visible = True
+
+        self.ax.set_xlim(self.xl)
+        self.ax.set_ylim(self.yl)
+        self.fig.canvas.draw()
+
+    def _buttons(self):
+
+        button_frame0 = tk.Frame(self, **fr)
+        button_frame0.pack(side=tk.TOP,  **frpk)
+
+        button_frame1 = tk.Frame(self, **fr)
+        button_frame1.pack(side=tk.TOP, **frpk)
+        
+        button_frame2 = tk.Frame(self, **fr)
+        button_frame2.pack(side=tk.TOP, **frpk)
+
+        prev_button100 = tk.Button(button_frame0,
+                                   text='-100',
+                                   command=lambda: self._prev(100), **btnstyle)
+        prev_button100.pack(side=tk.LEFT, expand=tk.NO, **frpk)
+        prev_button10 = tk.Button(button_frame0,
+                                  text='-10',
+                                  command=lambda: self._prev(10), **btnstyle)
+        prev_button10.pack(side=tk.LEFT, expand=tk.NO, **frpk)
+        prev_button1 = tk.Button(button_frame0,
+                                 text='-1',
+                                 command=lambda: self._prev(1), **btnstyle)
+        prev_button1.pack(side=tk.LEFT, expand=tk.NO, **frpk)
+
+        next_button1 = tk.Button(button_frame0,
+                                 text='+1',
+                                 command=lambda: self._next(1), **btnstyle)
+        next_button1.pack(side=tk.LEFT, expand=tk.NO, **frpk)
+        next_button10 = tk.Button(button_frame0,
+                                  text='+10',
+                                  command=lambda: self._next(10), **btnstyle)
+        next_button10.pack(side=tk.LEFT, expand=tk.NO, **frpk)
+        next_button100 = tk.Button(button_frame0,
+                                   text='+100',
+                                   command=lambda: self._next(100), **btnstyle)
+        next_button100.pack(side=tk.LEFT, expand=tk.NO, **frpk)
+
+        self.toggle_known_var = tk.IntVar()
+        toggle_known = tk.Checkbutton(button_frame1,
+                                 text='found peaks', variable=self.toggle_known_var,
+                                 command=self._toggle_known, **btnstyle)
+        toggle_known.pack(side=tk.LEFT, expand=tk.NO, **frpk)
+
+        self.toggle_pred_var = tk.IntVar()
+        toggle_pred = tk.Checkbutton(button_frame1,
+                                text='predicted peaks',variable=self.toggle_pred_var,
+                                command=self._toggle_pred, **btnstyle)
+        toggle_pred.pack(side=tk.LEFT, expand=tk.NO, **frpk)
+
+        self.fix_zoom_variable = tk.IntVar()
+        self.fix_zoom = tk.Checkbutton(button_frame1,
+                             text='fix zoom', variable=self.fix_zoom_variable,
+                             command=self._fix_zoom, **btnstyle)
+        self.fix_zoom.pack(side=tk.LEFT, expand=tk.NO, **frpk)
+
+        self.unit_cell_label = tk.Label(button_frame2, text="")
+        self.unit_cell_label.pack(side=tk.LEFT, expand=tk.NO, **frpk)
+    
+    def _set_unit_cell_info(self):
+        latt = self.cell.lattice_type.values[self.counter]
+        a = self.A[self.counter]
+        b = self.B[self.counter]
+        c = self.C[self.counter]
+        al = self.AL[self.counter]
+        be = self.BE[self.counter]
+        ga = self.GA[self.counter]
+
+        unit_cell_info = \
+        '%s; %s:%d, \ncounter: %d/%d \ncell type: %s\na,b,c,al,be,ga=%.2f, %.2f, %.2f,%.2f, %.2f, %.2f'\
+            % (self.fname, "", self.idx, self.counter+1, \
+            len(self.indices), latt,a,b,c,al,be,ga)
+
+        self.unit_cell_label.config( text=unit_cell_info) 
+
+    def _next(self, increment):
+        self.counter += increment
+        if self.counter >= len(self.indices):
+            self.counter = self.counter - increment
+            self.counter = len( self.indices)-1
+        self._update_display()
+
+    def _prev(self, increment):
+        self.counter = self.counter - increment
+        if self.counter < 0:
+            self.counter = 0
+        self._update_display()
+
+    def _toggle_known(self):
+        known_circ_visible = self.toggle_known_var.get()
+        for circ in self.known_circs:
+            circ.set_visible(known_circ_visible)
+        self.fig.canvas.draw()
+
+    def _toggle_pred(self):
+        pred_circ_visible = self.toggle_pred_var.get()
+        for circ in self.pred_circs:
+            circ.set_visible(pred_circ_visible)
+        self.fig.canvas.draw()
+
+    def _fix_zoom(self):
+        if self.fix_zoom_variable.get()==1:
+            self.xl = self.ax.get_xlim()
+            self.yl = self.ax.get_ylim()
+        else:
+            self._reset_zoom()
+
+    def _reset_zoom(self):
+        self.xl = (-0.5, self.img.shape[1] - 0.5)
+        self.yl = (self.img.shape[0] - 0.5, -0.5)
+        self.ax.set_xlim(self.xl)
+        self.ax.set_ylim(self.yl)
+        self.fig.canvas.draw()
+
+    def _update_display(self):
+        self._set_idx_fname_path()
+        self._set_df()
+        self._set_image()
+        self._set_centers()
+        self._set_unit_cell_info()
+        self.IV.set_data(self.img)
+        patches = self.ax.patches
+        while patches:
+            _ = patches.pop()
+        self.fig.canvas.draw()
+        self._display()
+
+
+###########################
+###########################
+###########################
+###########################
+###########################
+###########################
+###########################
+
+
+
+if __name__ == '__main__':
+    from argparse import ArgumentParser
+    parser = ArgumentParser(
+        description='')
+    parser.add_argument(
+        '-pre',
+        dest='prefix',
+        type=str,
+        default=None)
+    parser.add_argument(
+        '-k, --known-peaks',
+        dest='known_name',
+        type=str,
+        default=None)
+    parser.add_argument(
+        '-p, --predicted-peaks',
+        dest='pred_name',
+        type=str,
+        default=None)
+    parser.add_argument('-c, --cell', 
+        dest='cell_name', type=str, default=None)
+    parser.add_argument('-s, --stream-file', 
+        dest='stream_name', type=str, default=None)
+    parser.add_argument('-j, --num-jobs', 
+        dest='n_jobs', type=int, default=2)
+    args = parser.parse_args()
+
+    print(args.n_jobs, args.stream_name)
+    if args.stream_name is not None:
+        print("Pickling the stream!")
+        pred, known, cell = pickle_stream(args.stream_name, args.n_jobs)
+    elif args.prefix is not None:
+        known = args.prefix + ".known.pkl"
+        pred = args.prefix + ".pred.pkl"
+        cell = args.prefix + ".cell.pkl"
+    else:
+        assert( args.known_name is not None)
+        assert( args.pred_name is not None)
+        assert( args.cell_name is not None)
+
+        known = args.known_name
+        pred = args.pred_name
+        cell = args.cell_name
+   
+    print("erer")
+
+    root = tk.Tk()
+    root.title("view stream")
+    frame = ModelApp(
+        root,
+        known,
+        pred,
+        cell,
+        height=900,
+        width=700,
+        bg='snow')
+    frame.pack(fill=tk.BOTH, side=tk.TOP, expand=tk.YES)
+    root.mainloop()

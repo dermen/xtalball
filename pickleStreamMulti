@@ -1,0 +1,246 @@
+#!/usr/bin/python
+import numpy as np 
+import sys
+import pandas
+import h5py
+import re
+import os
+from joblib import Parallel, delayed
+
+# THIS CODE NEEDS TO BE MADE NEW
+
+###
+# CONVERT A CRYSTFEL STREAM FILE
+# INTO DATA TABLES SO THAT
+# THE DATA CAN BE EASILY MANIPULATED
+# AND ANALYZED
+
+# usage: python pickleStream.py myfile.stream
+#future usage: python pickleStream.py listofstreamfiles -p myoutputprefix
+
+#  3 TABLES ARE MADE, A DATATABLE OF KNOWN PEAKS, A DATA TABLE OF PREDICTED
+#  PEAKS, A table of unit cell information 
+# ~~~~~~~~~~~~~~~~~~
+# Globals
+
+remove_zero_intens = True
+
+# dummie function used below
+split_line = lambda x: x.strip().split()
+
+# in the stream file, these are the columns corresponding to the predicted peaks... 
+# ugly text files
+pred_pk_cols = ['h',
+ 'k',
+ 'l',
+ 'I',
+ 'sigma(I)',
+ 'peak',
+ 'background',
+ 'fs/px',
+ 'ss/px',
+ 'panel']
+# and the columns for found peaks... 
+known_pk_cols = ['fs/px','ss/px','(1/d)/nm^-1','Intensity' ,'Panel']
+
+#~~~~~~~~~~~~~~~~~~~~~
+
+# pass stream file as an arg.. 
+stream_file = sys.argv[1]
+prefix = os.path.splitext(stream_file)[0]
+
+# load the stream file contents
+print("Reading the stream file %s"%stream_file)
+stream_str = open(stream_file, 'r').read() # stream file
+stream_dir = os.path.abspath( os.path.dirname(stream_file) )
+
+# ~~~~~~~~~~~~~~~~~~~~~~~
+# parse the geometry section of the stream file
+s1 = 'Begin geometry file'
+s2 = 'End geometry file'
+geom = re.search('Begin geometry(.*)End geometry', stream_str, flags=re.DOTALL).group(1).split('\n')
+
+#~ find all paths that would lead to a dataset... then ensure only one is found because not compatible with multiple paths currently..  
+found_paths = []
+for line in geom:
+    if 'data = ' in line:
+        if line[0] == ';':
+            continue
+        found_paths.append( line.split('=')[-1].strip() )
+#assert( len( found_paths) == 1 ) 
+dataset_path = found_paths[0]
+print(dataset_path)
+# ~~~~~~~~~~
+
+def main( patts, jobID):
+
+#   containers for dataframes
+    all_known = [] # known or detecred peak dataframes`
+    all_pred = [] # predicted peak dataframes
+    all_cell = []
+    
+    for i_patt,patt in enumerate(patts):
+        if i_patt%50==0:
+            print ("Job %d --- Processing  patterns %d/%d"%(jobID, i_patt+1, len(patts)))
+
+#   get the data for the predicted peaks
+        s1 = 'Peaks from peak search'
+        s2 = 'End of peak list'
+        pk_dat =  list(map( split_line, patt.split(s1)[1].split(s2)[0].strip().split('\n') )) [1:]
+        known_pk_df = pandas.DataFrame.from_records(pk_dat, columns=known_pk_cols)
+
+#   get the cxi filename and dataset index
+        fname = os.path.join( stream_dir, patt.split('Image filename: ')[1].split('\n')[0].strip() ) 
+        assert( os.path.exists(fname) )
+        dataset_idx = int( patt.split('Event: //')[1].split('\n')[0].strip() ) 
+
+#   make cols float where approrpriate... 
+        for col in known_pk_cols[:-1]: # every col except panel col (which is a string... ) 
+            known_pk_df[col] = known_pk_df[col].values.astype(float)
+       
+#   add image location info...
+        known_pk_df['cxi_fname'] =  fname
+        known_pk_df['dataset_index'] =   dataset_idx
+        known_pk_df['dataset_path'] = dataset_path
+
+        assert( dataset_path in h5py.File(fname, 'r'))
+
+#   append the known peak dataframe for this pattern... 
+        all_known.append( known_pk_df ) 
+
+############################
+
+#   now check for crystals inside the pattern
+        if not 'Begin crystal' in patt and not 'End crystal' in patt:
+            continue
+        
+#   this is gross but it does the trick... 
+        xtals = [ list( map( split_line, \
+            ss.split('End crystal')[0].split('\n')[16:-2]))
+            for ss in  patt.split('Begin crystal')[1:] ]
+
+
+        xtal_cells = [  
+            ss.split('End crystal')[0].split('\n')[1:13] #[:16-2]
+            for ss in  patt.split('Begin crystal')[1:]   ]
+
+
+        cell_data = {'a':[], 'b':[], 'c':[], 'alpha':[], 'beta':[], 'gamma':[] , 'dataset_index':[],
+            'cxi_fname':[], 'dataset_path':[], 
+            'astar1':[],'astar2':[], 'astar3':[], 
+            'bstar1':[],'bstar2':[], 'bstar3':[], 
+            'cstar1':[],'cstar2':[], 'cstar3':[], 
+            'lattice_type':[], 'centering':[], 'diffraction_resolution_limit':[]}
+        for cell_lines in xtal_cells:
+            cell = cell_lines[0].split()
+#           cell_lines[0] --> 'Cell parameters 14.29725 23.52881 31.38764 nm, 91.11937 90.26797 89.47856 deg'
+            cell_data['a'].append( float( cell[2]) * 10 )
+            cell_data['b'].append(  float( cell[3]) * 10 ) 
+            cell_data['c'].append(  float( cell[4]) * 10 )
+            cell_data['alpha'] .append(  float( cell[6]) )
+            cell_data['beta'] .append(  float( cell[7])  )
+            cell_data['gamma'] .append(  float( cell[8]) )
+            cell_data['dataset_index'] .append( dataset_idx )
+            cell_data['cxi_fname'] .append( fname)
+            cell_data['dataset_path'] .append(  dataset_path)
+            
+            astar = cell_lines[1].split()[2:5]
+            bstar = cell_lines[2].split()[2:5]
+            cstar = cell_lines[3].split()[2:5]
+            astar1, astar2,astar3 = list(map( lambda x: float(x)*.1, astar) )
+            bstar1, bstar2,bstar3 = list(map( lambda x: float(x)*.1, bstar ))
+            cstar1, cstar2,cstar3 = list(map( lambda x: float(x)*.1, cstar ))
+            cell_data['astar1'].append(astar1)
+            cell_data['astar2'].append(astar2)
+            cell_data['astar3'].append(astar3)
+            cell_data['bstar1'].append(bstar1)
+            cell_data['bstar2'].append(bstar2)
+            cell_data['bstar3'].append(bstar3)
+            cell_data['cstar1'].append(cstar1)
+            cell_data['cstar2'].append(cstar2)
+            cell_data['cstar3'].append(cstar3)
+
+            lattice = cell_lines[4].split('=')[1].strip()
+            cell_data['lattice_type'].append( lattice)
+            
+            centering = cell_lines[5].split('=')[1].strip()
+            cell_data['centering'].append( centering)
+            
+            res = float( cell_lines[9].split('or')[1].strip().split()[0] )
+            cell_data['diffraction_resolution_limit'].append( res)
+    
+        all_cell.append(  pandas.DataFrame( data=cell_data ))
+
+            
+#   go through each xtal, make it a dataframe, label the xtal ID
+        pred_pk_dfs = []
+        for i_xtal,xtal in enumerate( xtals):
+            xtal = [  _row for _row in xtal if float(_row[3]) > 0  ]
+            df = pandas.DataFrame.from_records( xtal,  columns =pred_pk_cols )
+            df['xtal ID'] = i_xtal
+            pred_pk_dfs.append( df) 
+      
+
+#   concatenate the dataframes into 1
+        pred_pk_df = pandas.concat(pred_pk_dfs)
+
+#   make columns float when appropriate
+        for col in pred_pk_cols[:-1]:# every col except panel col (which is a string... ) 
+            pred_pk_df[col] = pred_pk_df[col].values.astype(float)
+        
+#   remove predikshins where intensity is <= 0
+        pred_pk_df = pred_pk_df[ pred_pk_df.I > 0]
+
+#   add the image location info
+        pred_pk_df['cxi_fname'] = fname
+        pred_pk_df['dataset_index'] = dataset_idx
+        pred_pk_df['dataset_path'] = dataset_path
+
+        all_pred.append( pred_pk_df )
+
+
+    return all_known, all_pred, all_cell
+
+# split the stream file into the patterns( hits) (each diffraction pattern hit is called a chunk in stream file)
+s = 'End chunk'
+idx = stream_str.rfind(s)
+stream_str = stream_str[ : idx+len(s)]
+
+patts = [ sub_str.split('End chunk')[0] \
+    for sub_str in  stream_str.split('Begin chunk')[1:] ]  
+
+n_jobs = int( sys.argv[2]) 
+patts_per_job = np.array_split( patts, n_jobs)
+
+results = Parallel(n_jobs=n_jobs)(delayed(main)(ppj, jid) for jid, ppj in enumerate( patts_per_job) )
+
+
+all_known = []
+all_pred = []
+all_cell = []
+for r in results:
+    if r[0]:
+        all_known += r[0]
+    if r[1]:
+        all_pred += r[1]
+
+    if r[2]:
+        all_cell += r[2]
+
+
+print("Combining data 1/3...")
+all_known = pandas.concat( all_known)
+print("Combining data 2/3...")
+all_pred = pandas.concat( all_pred)
+print("Combining data 3/3...")
+all_cell = pandas.concat( all_cell)
+
+print("Saving 1/3... ")
+all_pred.to_pickle('%s.pred.pkl'%prefix)
+print("Saving 2/3... ")
+all_known.to_pickle('%s.known.pkl'%prefix)
+print("Saving 2/3... ")
+all_cell.to_pickle('%s.cell.pkl'%prefix)
+
+print("Saved 3 new pandas.dataframe  pickle files: \n\t%s.pred.pkl \n\t%s.known.pkl \n\t %s.cell.pkl"%(prefix, prefix, prefix))
+
