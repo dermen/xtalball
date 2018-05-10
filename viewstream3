@@ -1,8 +1,9 @@
-#!/usr/bin/python
+#!/usr/local/opt/python/bin/python2.7
 try: 
     import Tkinter as tk
 except ImportError:
     import tkinter as tk
+import os
 import pandas
 import h5py
 import numpy as np
@@ -23,14 +24,29 @@ fr = {'bg': None, }
 frpk = {'padx': 5, 'pady': 5}
 
 class ModelApp(tk.Frame):
-    def __init__(self, master, known_pkl, pred_pkl, cell_pkl, *args, **kwargs):
+    def __init__(self, master, known_pkl, pred_pkl, cell_pkl,
+        pred_color='b',use_basename=False, *args, **kwargs):
         tk.Frame.__init__(self, *args, **kwargs)
         self.master = master
+
+
+        self.pred_color=pred_color
 
 #       load the dataframes
         self.known = pandas.read_pickle(known_pkl)
         self.pred = pandas.read_pickle(pred_pkl)
         self.cell = pandas.read_pickle(cell_pkl)
+
+        if 'xtal_id' in self.pred and 'xtal_id' in self.cell:
+            self.has_xtal_id=True
+        else:
+            self.has_xtal_id=False
+
+        if use_basename:
+            self.known.cxi_fname = [os.path.basename( f) for f in self.known.cxi_fname]
+            self.cell.cxi_fname = [os.path.basename( f) for f in self.cell.cxi_fname]
+            self.pred.cxi_fname = [os.path.basename( f) for f in self.pred.cxi_fname]
+
 
 #       load the files, put in a dict...
         self.unique_fnames = self.cell.cxi_fname.unique()
@@ -71,6 +87,10 @@ class ModelApp(tk.Frame):
         self.indices = df.dataset_index.values
         self.cxi_fnames = df.cxi_fname.values
         self.dset_paths = df.dataset_path.values
+        
+        #if self.has_xtal_id:
+        self.xtal_IDs = df.xtal_ID.values
+        
         self.A = df.a.values
         self.B = df.b.values
         self.C = df.c.values
@@ -84,12 +104,24 @@ class ModelApp(tk.Frame):
         self.idx = self.indices[self.counter]
         self.fname = self.cxi_fnames[self.counter]
         self.path = self.dset_paths[self.counter]
+        #if self.has_xtal_id:
+        self.xtal_id = self.xtal_IDs[self.counter]
 
     def _set_df(self):
-        self.df_k = self.known.loc[np.logical_and(
-            self.known.dataset_index == self.idx, self.known.cxi_fname == self.fname)]
-        self.df_p = self.pred.loc[np.logical_and(
-            self.pred.dataset_index == self.idx, self.pred.cxi_fname == self.fname)]
+        cond1 = "cxi_fname=='%s'"%self.fname
+        cond2 = "dataset_index==%d"%self.idx
+        self.df_k = self.known.query( cond1 ).query(cond2)
+        
+        #if self.has_xtal_id:
+        cond3 = "xtal_ID==%d"%self.xtal_id
+        self.df_p = self.pred.query( cond1 ).query(cond2).query(cond3)
+        #else:
+        #    self.df_p = self.pred.query( cond1 ).query(cond2)
+        
+        #self.df_k = self.known.loc[np.logical_and(
+        #    self.known.dataset_index == self.idx, self.known.cxi_fname == self.fname)]
+        #self.df_p = self.pred.loc[np.logical_and(
+        #    self.pred.dataset_index == self.idx, self.pred.cxi_fname == self.fname)]
 
     def _set_centers(self):
         self.known_centers = zip(
@@ -123,7 +155,7 @@ class ModelApp(tk.Frame):
         for cent in self.pred_centers:
             circ = mpl.patches.Circle(
                 xy=(cent[1], cent[0]), radius=9, 
-                ec='b', fc='none', lw=1, ls='dashed')
+                ec=self.pred_color, fc='none', lw=1, ls='dashed')
             self.ax.add_patch(circ)
             self.pred_circs.append(circ)
             if self.toggle_pred_var.get():
@@ -205,6 +237,10 @@ class ModelApp(tk.Frame):
         be = self.BE[self.counter]
         ga = self.GA[self.counter]
 
+        #if self.has_xtal_id:
+            #xtal_id = self.cell.xtal_id.values[self.counter]
+            #nxtals = self.cell.xtal_id
+
         unit_cell_info = \
         '%s; %s:%d, \ncounter: %d/%d \ncell type: %s\na,b,c,al,be,ga=%.2f, %.2f, %.2f,%.2f, %.2f, %.2f'\
             % (self.fname, "", self.idx, self.counter+1, \
@@ -285,21 +321,27 @@ if __name__ == '__main__':
         type=str,
         default=None)
     parser.add_argument(
-        '-k, --known-peaks',
+        '--known',
         dest='known_name',
         type=str,
         default=None)
     parser.add_argument(
-        '-p, --predicted-peaks',
+        '--peaks',
         dest='pred_name',
         type=str,
         default=None)
-    parser.add_argument('-c, --cell', 
+    parser.add_argument('--cell', 
         dest='cell_name', type=str, default=None)
     parser.add_argument('-s, --stream-file', 
         dest='stream_name', type=str, default=None)
     parser.add_argument('-j, --num-jobs', 
         dest='n_jobs', type=int, default=2)
+    
+    parser.add_argument('--pred-color', 
+        dest='pred_color', type=str, default='b')
+    
+    parser.add_argument( '--use-basename', action='store_true',
+        default=False, dest='use_basename')
     args = parser.parse_args()
 
     print(args.n_jobs, args.stream_name)
@@ -319,7 +361,6 @@ if __name__ == '__main__':
         pred = args.pred_name
         cell = args.cell_name
    
-    print("erer")
 
     root = tk.Tk()
     root.title("view stream")
@@ -328,6 +369,8 @@ if __name__ == '__main__':
         known,
         pred,
         cell,
+        pred_color=args.pred_color,
+        use_basename=args.use_basename,
         height=900,
         width=700,
         bg='snow')

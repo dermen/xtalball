@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/local/opt/python/bin/python2.7
 try: 
     import Tkinter as tk
 except ImportError:
@@ -51,6 +51,9 @@ class multi_h5s_img:
 class multi_h5s_npeaks:
     def __init__(self, fnames, peaks_path):
         self.h5s = [ h5py.File(f,'r') for f in fnames]
+        print self.h5s[0].filename
+        print self.h5s[0].keys()
+        #print self.h5s[0][peaks_path].keys()
         self.N = sum( [h['%s/nPeaks'%peaks_path].shape[0] 
             for h in self.h5s])
         self.peaks_path = peaks_path
@@ -91,15 +94,17 @@ class multi_h5s_peaks:
 
 
 class ModelApp(tk.Frame):
-    def __init__(self, master, cxi_fname, image_path, peaks_path, *args, **kwargs):
+    def __init__(self, master, cxi_fname, image_path, peaks_path, circ_color='Deeppink',
+        *args, **kwargs):
         tk.Frame.__init__(self, *args, **kwargs)
         self.master = master
 
+        self.circ_color=circ_color
         self.fnames = glob.glob(cxi_fname) 
         self.imgs =  multi_h5s_img( self.fnames, image_path)
         self.npeaks =  multi_h5s_npeaks( self.fnames, peaks_path)
-        self.peaksX = multi_h5s_peaks( self.fnames, 'peaks/peakXPosRaw', peaks_path)
-        self.peaksY = multi_h5s_peaks( self.fnames, 'peaks/peakYPosRaw', peaks_path)
+        self.peaksX = multi_h5s_peaks( self.fnames, '%s/peakXPosRaw'%peaks_path, peaks_path)
+        self.peaksY = multi_h5s_peaks( self.fnames, '%s/peakYPosRaw'%peaks_path, peaks_path)
 
         self.indices = np.arange( self.imgs.N)#.shape[0] )
         self.counter = 0
@@ -184,7 +189,7 @@ class ModelApp(tk.Frame):
         self.known_circs = []
         for cent in self.known_centers:
             circ = mpl.patches.Circle(
-                xy=(cent[1], cent[0]), radius=7, ec='Deeppink', fc='none', lw=1)
+                xy=(cent[1], cent[0]), radius=7, ec=self.circ_color, fc='none', lw=1)
             self.ax.add_patch(circ)
             self.known_circs.append(circ)
             if self.toggle_known_var.get():
@@ -366,6 +371,13 @@ if __name__ == '__main__':
         dest='fname',
         type=str,
         default=None)
+    
+    parser.add_argument(
+        '--circ-color',
+        dest='circ_color',
+        type=str,
+        default='Deeppink')
+    
     args = parser.parse_args()
 
     
@@ -376,6 +388,7 @@ if __name__ == '__main__':
         args.fname,
         args.images_path,
         args.peaks_path,
+        circ_color=args.circ_color,
         height=900,
         width=700,
         bg='snow')

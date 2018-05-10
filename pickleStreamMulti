@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/local/opt/python/bin/python2.7
 import numpy as np 
 import sys
 import pandas
@@ -91,7 +91,7 @@ def main( patts, jobID):
 
 #   get the cxi filename and dataset index
         fname = os.path.join( stream_dir, patt.split('Image filename: ')[1].split('\n')[0].strip() ) 
-        assert( os.path.exists(fname) )
+        #assert( os.path.exists(fname) )
         dataset_idx = int( patt.split('Event: //')[1].split('\n')[0].strip() ) 
 
 #   make cols float where approrpriate... 
@@ -103,7 +103,7 @@ def main( patts, jobID):
         known_pk_df['dataset_index'] =   dataset_idx
         known_pk_df['dataset_path'] = dataset_path
 
-        assert( dataset_path in h5py.File(fname, 'r'))
+        #assert( dataset_path in h5py.File(fname, 'r'))
 
 #   append the known peak dataframe for this pattern... 
         all_known.append( known_pk_df ) 
@@ -125,13 +125,17 @@ def main( patts, jobID):
             for ss in  patt.split('Begin crystal')[1:]   ]
 
 
+        print("Found %d xtals"%len(xtal_cells))
+
         cell_data = {'a':[], 'b':[], 'c':[], 'alpha':[], 'beta':[], 'gamma':[] , 'dataset_index':[],
             'cxi_fname':[], 'dataset_path':[], 
             'astar1':[],'astar2':[], 'astar3':[], 
             'bstar1':[],'bstar2':[], 'bstar3':[], 
             'cstar1':[],'cstar2':[], 'cstar3':[], 
-            'lattice_type':[], 'centering':[], 'diffraction_resolution_limit':[]}
-        for cell_lines in xtal_cells:
+            'lattice_type':[], 'centering':[], 
+            'xtal_ID':[],'diffraction_resolution_limit':[]}
+        
+        for i_xtal,cell_lines in enumerate(xtal_cells):
             cell = cell_lines[0].split()
 #           cell_lines[0] --> 'Cell parameters 14.29725 23.52881 31.38764 nm, 91.11937 90.26797 89.47856 deg'
             cell_data['a'].append( float( cell[2]) * 10 )
@@ -143,7 +147,7 @@ def main( patts, jobID):
             cell_data['dataset_index'] .append( dataset_idx )
             cell_data['cxi_fname'] .append( fname)
             cell_data['dataset_path'] .append(  dataset_path)
-            
+            cell_data['xtal_ID'].append( i_xtal)
             astar = cell_lines[1].split()[2:5]
             bstar = cell_lines[2].split()[2:5]
             cstar = cell_lines[3].split()[2:5]
@@ -175,12 +179,10 @@ def main( patts, jobID):
 #   go through each xtal, make it a dataframe, label the xtal ID
         pred_pk_dfs = []
         for i_xtal,xtal in enumerate( xtals):
-            xtal = [  _row for _row in xtal if float(_row[3]) > 0  ]
             df = pandas.DataFrame.from_records( xtal,  columns =pred_pk_cols )
-            df['xtal ID'] = i_xtal
+            df['xtal_ID'] = i_xtal
             pred_pk_dfs.append( df) 
       
-
 #   concatenate the dataframes into 1
         pred_pk_df = pandas.concat(pred_pk_dfs)
 
@@ -188,9 +190,6 @@ def main( patts, jobID):
         for col in pred_pk_cols[:-1]:# every col except panel col (which is a string... ) 
             pred_pk_df[col] = pred_pk_df[col].values.astype(float)
         
-#   remove predikshins where intensity is <= 0
-        pred_pk_df = pred_pk_df[ pred_pk_df.I > 0]
-
 #   add the image location info
         pred_pk_df['cxi_fname'] = fname
         pred_pk_df['dataset_index'] = dataset_idx
